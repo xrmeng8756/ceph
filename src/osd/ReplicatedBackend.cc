@@ -743,13 +743,28 @@ int ReplicatedBackend::be_deep_scrub(
       pos.data_hash = bufferhash(-1);
     }
 
-    bufferlist bl;
-    r = store->read(
+    std::map<uint64_t, uint64_t> m;
+    r = store->fiemap(
       ch,
       ghobject_t(
-	poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+        poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
       pos.data_pos,
-      cct->_conf->osd_deep_scrub_stride, bl,
+      cct->_conf->osd_deep_scrub_stride,
+      m);
+    if (r < 0) {
+      dout(20) << __func__ << "  " << poid << " got "
+               << r << " on fiemap, read_error" << dendl;
+      o.read_error = true;
+      return 0;
+    }
+    bufferlist bl;
+    interval_set<uint64_t> data_included(m);
+    r = store->readv(
+      ch,
+      ghobject_t(
+        poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+      data_included,
+      bl,
       fadvise_flags);
     if (r < 0) {
       dout(20) << __func__ << "  " << poid << " got "
