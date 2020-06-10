@@ -1720,19 +1720,12 @@ void ReplicatedBackend::submit_push_data(
 		      oi.expected_write_size,
 		      oi.alloc_hint_flags);
   }
-  uint64_t off = 0;
   uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
   if (cache_dont_need)
     fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
-  for (interval_set<uint64_t>::const_iterator p = intervals_included.begin();
-       p != intervals_included.end();
-       ++p) {
-    bufferlist bit;
-    bit.substr_of(data_included, off, p.get_len());
-    t->write(coll, ghobject_t(target_oid),
-	     p.get_start(), p.get_len(), bit, fadvise_flags);
-    off += p.get_len();
-  }
+
+  t->writev(coll, ghobject_t(target_oid),
+            intervals_included, data_included, fadvise_flags);
 
   if (!omap_entries.empty())
     t->omap_setkeys(coll, ghobject_t(target_oid), omap_entries);

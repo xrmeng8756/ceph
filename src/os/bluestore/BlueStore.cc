@@ -10028,7 +10028,16 @@ void BlueStore::_txc_add_transaction(TransContext *txc, Transaction *t)
 			    op->alloc_hint_flags);
       }
       break;
-
+    case Transaction::OP_WRITEV:
+      {
+        interval_set<uint64_t> m;
+        i.decode_fiemap(m);
+        bufferlist bl;
+        i.decode_bl(bl);
+        uint32_t fadvise_flags = i.get_fadvise_flags();
+        r = _writev(txc, c, o, m, bl, fadvise_flags);
+      }
+      break;
     default:
       derr << __func__ << "bad op " << op->op << dendl;
       ceph_abort();
@@ -11217,6 +11226,117 @@ int BlueStore::_write(TransContext *txc,
   dout(10) << __func__ << " " << c->cid << " " << o->oid
 	   << " 0x" << std::hex << offset << "~" << length << std::dec
 	   << " = " << r << dendl;
+  return r;
+}
+
+int BlueStore::_do_writev(
+  TransContext *txc,
+  CollectionRef& c,
+  OnodeRef o,
+  const interval_set<uint64_t>& m,
+  bufferlist& bl,
+  uint32_t fadvise_flags)
+{
+  int r = 0;
+
+  dout(20) << __func__
+           << " " << o->oid
+           << " fiemap " << m << std::hex
+           << " - have 0x" << o->onode.size
+           << " (" << std::dec << o->onode.size << ")"
+           << " bytes"
+           << " fadvise_flags 0x" << std::hex << fadvise_flags << std::dec
+           << dendl;
+  _dump_onode(cct, *o, 30);
+
+  if (m.empty()) {
+    return 0;
+  }
+
+  GarbageCollector gc(c->store->cct);
+  int64_t benefit;
+  auto dirty_start = m.range_start();
+  auto dirty_end = m.range_end();
+
+  WriteContext wctx;
+  _choose_write_options(c, o, fadvise_flags, &wctx);
+  uint64_t bl_off = 0;
+  for (auto p = m.begin(); p != m.end(); ++p) {
+    auto offset = p.get_start();
+    auto length = p.get_len();
+    bufferlist bit;
+    bit.substr_of(bl, bl_off, length);
+    o->extent_map.fault_range(db, offset, length);
+    _do_write_data(txc, c, o, offset, length, bit, &wctx);
+    bl_off += length;
+  }
+  r = _do_alloc_write(txc, c, o, &wctx);
+  if (r < 0) {
+    derr << __func__ << " _do_alloc_write failed with " << cpp_strerror(r)
+         << dendl;
+    goto out;
+  }
+
+  // NB: _wctx_finish() will empty old_extents
+  // so we must do gc estimation before that
+  benefit = gc.estimate(dirty_start,
+                        dirty_end - dirty_start,
+                        o->extent_map,
+                        wctx.old_extents,
+                        min_alloc_size);
+
+  _wctx_finish(txc, c, o, &wctx);
+  if (m.range_end() > o->onode.size) {
+    dout(20) << __func__ << " extending size to 0x" << std::hex
+             << m.range_end() << std::dec << dendl;
+    o->onode.size = m.range_end();
+  }
+
+  if (benefit >= g_conf->bluestore_gc_enable_total_threshold) {
+    if (!gc.get_extents_to_collect().empty()) {
+      dout(20) << __func__ << " perform garbage collection, "
+               << "expected benefit = " << benefit << " AUs" << dendl;
+      r = _do_gc(txc, c, o, gc, wctx, &dirty_start, &dirty_end);
+      if (r < 0) {
+        derr << __func__ << " _do_gc failed with " << cpp_strerror(r)
+             << dendl;
+        goto out;
+      }
+      dout(20)<<__func__<<" gc range is " << std::hex << dirty_start
+              << "~" << dirty_end - dirty_start << std::dec << dendl;
+    }
+  }
+  o->extent_map.compress_extent_map(dirty_start, dirty_end - dirty_start);
+  o->extent_map.dirty_range(dirty_start, dirty_end - dirty_start);
+
+  r = 0;
+
+ out:
+  return r;
+}
+
+int BlueStore::_writev(
+  TransContext *txc,
+  CollectionRef& c,
+  OnodeRef& o,
+  const interval_set<uint64_t>& m,
+  bufferlist& bl,
+  uint32_t fadvise_flags)
+{
+  dout(15) << __func__ << " " << c->cid << " " << o->oid
+           << " fiemap " << m
+           << dendl;
+  int r = 0;
+  if (!m.empty() && m.range_end() >= OBJECT_MAX_SIZE) {
+    r = -E2BIG;
+  } else {
+    _assign_nid(txc, o);
+    r = _do_writev(txc, c, o, m, bl, fadvise_flags);
+    txc->write_onode(o);
+  }
+  dout(10) << __func__ << " " << c->cid << " " << o->oid
+           << " fiemap " << m
+           << " = " << r << dendl;
   return r;
 }
 

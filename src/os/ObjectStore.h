@@ -405,6 +405,7 @@ public:
       OP_TRY_RENAME = 41,   // oldcid, oldoid, newoid
 
       OP_COLL_SET_BITS = 42, // cid, bits
+      OP_WRITEV = 44, // cid, oid, fiemap, bl
     };
 
     // Transaction hint type
@@ -964,6 +965,9 @@ public:
       void decode_keyset_bl(bufferlist *pbl){
         decode_str_set_to_bl(data_bl_p, pbl);
       }
+      void decode_fiemap(interval_set<uint64_t> &m) {
+        ::decode(m, data_bl_p);
+      }
 
       const ghobject_t &get_oid(__le32 oid_id) {
         assert(oid_id < objects.size());
@@ -1429,6 +1433,23 @@ public:
       _op->expected_object_size = expected_object_size;
       _op->expected_write_size = expected_write_size;
       _op->alloc_hint_flags = flags;
+      data.ops++;
+    }
+
+    void writev(
+      coll_t cid,
+      const ghobject_t &oid,
+      const interval_set<uint64_t> &m,
+      const bufferlist& write_data,
+      uint32_t flags
+    ) {
+      Op* _op = _get_next_op();
+      _op->op = OP_WRITEV;
+      _op->cid = _get_coll_id(cid);
+      _op->oid = _get_object_id(oid);
+      ::encode(m, data_bl);
+      ::encode(write_data, data_bl);
+      data.fadvise_flags = data.fadvise_flags | flags;
       data.ops++;
     }
 

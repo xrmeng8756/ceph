@@ -440,6 +440,23 @@ void ObjectStore::Transaction::dump(ceph::Formatter *f)
       }
       break;
 
+    case Transaction::OP_WRITEV:
+      {
+        coll_t cid = i.get_cid(op->cid);
+        ghobject_t oid = i.get_oid(op->oid);
+        interval_set<uint64_t> m;
+        i.decode_fiemap(m);
+        bufferlist bl;
+        i.decode_bl(bl);
+        f->dump_string("op_name", "writev");
+        f->dump_stream("collection") << cid;
+        f->dump_stream("oid") << oid;
+        f->dump_stream("fiemap") << m;
+        f->dump_unsigned("bufferlist length", bl.length());
+      }
+      break;
+
+
     default:
       f->dump_string("op_name", "unknown");
       f->dump_unsigned("op_code", op->op);

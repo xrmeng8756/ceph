@@ -2832,6 +2832,20 @@ private:
                       bufferlist& bl,
                       WriteContext *wctx);
 
+  int _do_writev(TransContext *txc,
+                 CollectionRef& c,
+                 OnodeRef o,
+                 const interval_set<uint64_t>& m,
+                 bufferlist& bl,
+                 uint32_t fadvise_flags);
+
+  int _writev(TransContext *txc,
+              CollectionRef& c,
+              OnodeRef& o,
+              const interval_set<uint64_t>& m,
+              bufferlist& bl,
+              uint32_t fadvise_flags);
+
   int _touch(TransContext *txc,
 	     CollectionRef& c,
 	     OnodeRef& o);
